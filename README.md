@@ -1,4 +1,4 @@
-# REST-GAN: A Dual-Purpose Deep Generative Model for Synthesizing and Decoding Resting-State EEG
+# REST-GAN: A Deep Generative Model for Synthesizing and Decoding Resting-State EEG
 This repository contains the official implementation of REST-GAN -- a generative model for synthesizing multi-channel resting-state EEG of individual participants using Wasserstein GAN with Gradient Penalty (WGAN-GP), whose critic is also used as an unsupervised feature extractor.
 An earlier version of this work (YARE-GAN) is available as a preprint on [arXiv](https://arxiv.org/abs/2503.02636v3).
 
