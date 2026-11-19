@@ -1,7 +1,7 @@
 import torch
 from keras import layers
 import keras
-from .common_v0 import SubjectLayers, convBlock, ChannelMerger, ResidualBlock, SelfAttention1D, LearnablePositionalEmbedding, ConvBlockResidual, StridedResidualBlock, SubjectLayers_FiLM
+from .common_v0 import SubjectLayers, convBlock, ChannelMerger, ResidualBlock, SelfAttention1D, LearnablePositionalEmbedding, ConvBlockResidual, StridedResidualBlock
 from ..preprocessing.spectral_regularization import spectral_regularization_loss
 
 
@@ -19,7 +19,7 @@ class Critic(keras.Model):
         kernel_initializer = keras.initializers.RandomNormal(mean=0.0, stddev=0.02)
 
         if use_sublayer:
-            self.sub_layer = SubjectLayers_FiLM(feature_dim, feature_dim, n_subjects, init_id=True)
+            self.sub_layer = SubjectLayers(feature_dim, feature_dim, n_subjects, init_id=True)
 
         if use_channel_merger:
             self.pos_emb = ChannelMerger(
@@ -85,7 +85,7 @@ class Generator(keras.Model):
         kernel_initializer = keras.initializers.RandomNormal(mean=0.0, stddev=0.02)
 
         if use_sublayer:
-            self.sub_layer = SubjectLayers_FiLM(feature_dim, feature_dim, n_subjects, init_id=True)
+            self.sub_layer = SubjectLayers(feature_dim, feature_dim, n_subjects, init_id=True)
 
         if use_channel_merger:
             self.pos_emb = ChannelMerger(
@@ -231,17 +231,16 @@ class WGAN_GP_V0(keras.Model):
         real_data, sub, pos = data['x'], data['sub'], data['pos']
 
         batch_size = real_data.size(0)
-        # mean = real_data.mean()
-        # std = real_data.std()
+        mean = real_data.mean()
+        std = real_data.std()
 
         # train critic
         # for _ in range(2):
-        noise = keras.random.normal((batch_size, self.latent_dim), dtype=real_data.dtype)
-        perm = torch.randperm(batch_size, device=real_data.device)
-        fake_sub = sub[perm].view(-1, 1)
-        fake_data = self.generator((noise, fake_sub, pos)).detach() 
+        noise = keras.random.normal((batch_size, self.latent_dim), mean=mean, stddev=std, dtype=real_data.dtype)
+        random_sub = torch.randint(0, sub.max().item(), (batch_size, 1), device=real_data.device)
+        fake_data = self.generator((noise, random_sub, pos)).detach()  # TODO: consider using random sub
         real_pred = self.critic(data)
-        fake_pred = self.critic({'x': fake_data, 'sub': fake_sub, 'pos': pos})
+        fake_pred = self.critic({'x': fake_data, 'sub': random_sub, 'pos': pos})  # TODO: should we use the same sub and pos for fake data?
         gp = self.gradient_penalty(real_data, fake_data.detach(), sub, pos)
         self.zero_grad()
         d_loss = (fake_pred.mean() - real_pred.mean()) + gp * self.gradient_penalty_weight
@@ -261,12 +260,12 @@ class WGAN_GP_V0(keras.Model):
                 gradient_norms.append(p.grad.norm().item())
 
         # train generator
-        noise = keras.random.normal((batch_size, self.latent_dim), dtype=real_data.dtype)
+        noise = keras.random.normal((batch_size, self.latent_dim), mean=mean, stddev=std, dtype=real_data.dtype)
 
         self.zero_grad()
-        # random_sub = torch.randint(0, sub.max().item()+1, (batch_size, 1), device=real_data.device)
-        x_gen = self.generator((noise, fake_sub, pos))
-        fake_pred = self.critic({'x': x_gen, 'sub': fake_sub, 'pos': pos})
+        # random_sub = torch.randint(0, sub.max().item(), (batch_size, 1), device=real_data.device)  # TODO: change it back to real labels if necessary
+        x_gen = self.generator((noise, random_sub, pos))  # TODO: consider using random positions
+        fake_pred = self.critic({'x': x_gen, 'sub': random_sub, 'pos': pos})
         g_loss = -fake_pred.mean()
         g_loss.backward()
 

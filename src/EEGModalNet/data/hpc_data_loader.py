@@ -83,7 +83,9 @@ def load_data(eeg_data_path,
 
 
 class RandomCropEEGDataset(torch.utils.data.Dataset):
-    def __init__(self, x_cont, sub_ids, pos, seg_len=512, n_samples=200_000):
+    def __init__(self, x_cont, sub_ids, pos, seg_len=512, n_samples=200_000, paired=False):
+        # paired=True also returns 'x2', a second random crop of the same recording (contrastive loss)
+        self.paired = paired
         self.x_cont = x_cont
         self.sub_ids = sub_ids
         self.pos = pos
@@ -111,4 +113,8 @@ class RandomCropEEGDataset(torch.utils.data.Dataset):
         sub = self.sub_ids[s]
         pos = self.pos[s]
 
-        return {"x": segment.permute(1, 0), "sub": sub, "pos": pos}
+        item = {"x": segment.permute(1, 0), "sub": sub, "pos": pos}
+        if self.paired:
+            st2 = torch.randint(0, max_start + 1, (1,)).item()
+            item["x2"] = self.x_cont[s, :, st2:st2+self.seg_len].permute(1, 0)
+        return item

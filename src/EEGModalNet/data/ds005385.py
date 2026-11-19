@@ -5,7 +5,7 @@ import pandas as pd
 
 import mne
 import xarray as xr
-from scipy.signal import butter, sosfiltfilt
+from scipy.signal import butter, sosfiltfilt, resample
 from meegkit import dss
 from src.EEGModalNet.preprocessing.preprocessing import preprocess_data
 
@@ -54,14 +54,13 @@ def create_dataset(bids_root_path,
         x, _ = dss.dss_line(x.T, sfreq=1000, fline=50)
         x = x.T
 
-        from scipy.signal import resample
         sos = butter(4, 0.5, btype='high', fs=1000, output='sos')
         x = sosfiltfilt(sos, x, axis=-1)
 
         n_samples = int((x.shape[-1] / 1000) * 128)
         x = resample(x, num=n_samples, axis=-1)
         cutoff = 23168
-        x = x[:, :, :cutoff]  # HACK to prevent padding, 23168 is the shortest duration after resampling
+        x = x[:, :, :cutoff]  # HACK to prevent padding, 23168 is the shortest duration after resampling when resampling to 128 Hz
 
         x = xr.DataArray(x, dims=['subject', 'channel', 'time'], coords={'subject': [sub_id], 'channel': channels, 'time': np.arange(0, cutoff, 1)})
         if sub_id == subject_id[0]:
@@ -73,6 +72,41 @@ def create_dataset(bids_root_path,
     dataset.to_netcdf(output_path, engine='h5netcdf')
 
 
+def create_unprocessed_dataset(bids_root_path,
+                               subject_id,
+                               channels,
+                               output_path='data/ds005385/ds005385_fs-256.nc5',
+                               resample_rate=256):
+    """Create a dataset based on the participants ids without any preprocessing."""
+    for sub_id in subject_id:
+        raw = mne.io.read_raw_edf(f'{bids_root_path}/{sub_id}/ses-1/eeg/{sub_id}_ses-1_task-EyesClosed_acq-pre_eeg.edf', verbose=0)
+        raw.pick_channels(channels, verbose=0)
+        x = raw.get_data()
+        x = x.reshape(1, *x.shape)
+
+        n_samples = int((x.shape[-1] / 1000) * resample_rate)
+        x = resample(x, num=n_samples, axis=-1)
+
+        cutoff = 46336  # HACK to prevent padding, 46336 is the shortest duration after resampling when resampling to 256 Hz
+        lnx = x.shape[-1] - cutoff
+        if lnx < 0:
+            print(f"Subject {sub_id} has less than {cutoff} samples after resampling, skipping.")
+            continue
+        else:
+            start = int(np.floor(lnx/2))
+            end = start + cutoff
+            x = x[:, :, start:end]
+
+        x = xr.DataArray(x, dims=['subject', 'channel', 'time'], coords={'subject': [sub_id], 'channel': CHANNELS, 'time': np.arange(0, cutoff, 1)})
+        if sub_id == subject_id[0]:
+            dataset = x
+        else:
+            dataset = xr.concat([dataset, x], dim='subject')
+    
+    # save
+    dataset.to_netcdf(output_path, engine='h5netcdf')
+
+
 def process_ds005385_for_CBraMod(sub_id: str,
                                  channels: List[str],
                                  resampling_frq=200,
@@ -80,10 +114,13 @@ def process_ds005385_for_CBraMod(sub_id: str,
                                  filter_bounds=[0.3, 75],
                                  verbose=False,
                                  microvolts=False,
-                                 pretrain=False):
+                                 pretrain=False,
+                                 edf_dir=None):
 
-    # open data
-    raw = mne.io.read_raw_edf(f'ds005385/{sub_id}/ses-1/eeg/{sub_id}_ses-1_task-EyesClosed_acq-pre_eeg.edf', verbose=verbose, preload=True)
+    # open data (from edf_dir if given, otherwise from the BIDS tree)
+    name = f'{sub_id}_ses-1_task-EyesClosed_acq-pre_eeg.edf'
+    path = f'ds005385/{sub_id}/ses-1/eeg/{name}' if edf_dir is None else f'{edf_dir}/{name}'
+    raw = mne.io.read_raw_edf(path, verbose=verbose, preload=True)
     raw.set_montage('standard_1020')
 
     # pick eeg channels
@@ -91,6 +128,8 @@ def process_ds005385_for_CBraMod(sub_id: str,
     # ['T3', 'T4', 'T5', 'T6'] channels that are only in the 10-20 system
     # replaced with their equivalent name in the 10-10 system [T7, T8, P7, P8]
     raw.pick(channels, verbose=verbose)
+    if raw.ch_names != list(channels):  # the channels must be in the given order
+        raise ValueError(f'{path}: channels {raw.ch_names} after picking, expected {list(channels)}')
 
     # interpolate bad channels if there is any
     print('interpolating bad channels...')
@@ -119,3 +158,31 @@ def process_ds005385_for_CBraMod(sub_id: str,
     eeg_array = eeg_array.transpose(0, 3, 1, 2)
 
     return eeg_array
+
+
+MODEL_CHANNELS = ['O1', 'O2', 'P1', 'P2', 'C1', 'C2', 'F1', 'F2']
+
+
+def create_raw_128hz_dataset(edf_dir,
+                             subject_ids,
+                             output_path,
+                             channels=MODEL_CHANNELS,
+                             sfreq=128,
+                             n_samples=23168):
+    """Create a dataset of the raw eyes-closed recordings, only downsampled to 128 Hz (data/ds005385/ds005385.nc5)."""
+    data, kept, short = [], [], []
+    for sub_id in subject_ids:
+        raw = mne.io.read_raw_edf(f'{edf_dir}/{sub_id}_ses-1_task-EyesClosed_acq-pre_eeg.edf', preload=True, verbose=0)
+        x = raw.pick(channels).reorder_channels(channels).resample(sfreq, verbose=0).get_data()
+        # skip recordings shorter than n_samples (181 s)
+        if x.shape[-1] < n_samples:
+            short.append((sub_id, x.shape[-1]))
+            continue
+        data.append(x[:, :n_samples])
+        kept.append(sub_id)
+    dataset = xr.DataArray(np.stack(data), dims=['subject', 'channel', 'time'],
+                           coords={'subject': kept, 'channel': channels, 'time': np.arange(n_samples)})
+
+    # save
+    dataset.to_netcdf(output_path, engine='h5netcdf')
+    return kept, short

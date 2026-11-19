@@ -174,6 +174,8 @@ if __name__ == '__main__':
              'P6', 'PO7', 'PO3', 'POz', 'PO4', 'PO8']
     }
 
+    raise SystemExit('pipeline/benchmark_channels.py is an April-2025 Keras training script of the earlier model and '
+                     'measures no cost. Use pipeline/benchmark_cost.py.')
     params = parser.parse_args()
     data_path = params.data
 

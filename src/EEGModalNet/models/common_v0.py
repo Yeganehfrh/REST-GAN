@@ -645,6 +645,21 @@ class DualFiLMBlock(nn.Module):
         return gamma * x + beta
     
 
+class ConditionProjection(nn.Module):
+    """Linear map of the participant and eye-state embeddings, for the projection term of the critic."""
+    def __init__(self, d_sub: int, d_state: int, dim: int):
+        super().__init__()
+        self.sub = nn.Linear(d_sub, dim, bias=False)
+        self.state = nn.Linear(d_state, dim, bias=False)
+        for layer in (self.sub, self.state):
+            nn.init.normal_(layer.weight, mean=0.0, std=0.02)
+
+    def forward(self, subj_emb, state_emb):
+        # cast to the dtype of the weights: under mixed precision Keras passes float16 inputs
+        dtype = self.sub.weight.dtype
+        return self.sub(subj_emb.to(dtype)) + self.state(state_emb.to(dtype))
+
+
 class FiLMBlock(nn.Module):
     def __init__(self, n_channels, d_sub):
         super().__init__()

@@ -37,6 +37,16 @@ def preprocess_data(data: np.ndarray,
     return data_clamped
 
 
+def zscore_recordings(data: np.ndarray, clip: float | None = 20.0) -> np.ndarray:
+    """Z-score each recording and channel over time, then clip at `clip` SD. data: (n_recordings, n_channels, n_times).
+    Gives the same data as `preprocess_data` (baseline correction, RobustScaler, StandardScaler, clipping).
+    """
+    mean = data.mean(axis=-1, keepdims=True)
+    std = data.std(axis=-1, keepdims=True)
+    z = (data - mean) / np.where(std == 0, 1.0, std)
+    return z if clip is None else np.clip(z, -clip, clip)
+
+
 def print_stats(x, name):
     print(f">>>>{name} Mean: {x.mean()}, Std: {x.std()}, Max: {x.max()}, Min: {x.min()}")
 
